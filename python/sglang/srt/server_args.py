@@ -331,6 +331,10 @@ class ServerArgs:
     quantization: Optional[str] = None
     quantization_param_path: Optional[str] = None
     kv_cache_dtype: str = "auto"
+    # TriAxialKV: mixed INT2/INT4 KV cache (see TRIAXIAL_DESIGN.md)
+    triaxial_kv: bool = False
+    triaxial_int2_fraction: float = 0.75
+    triaxial_policy: Optional[str] = None
     enable_fp32_lm_head: bool = False
     modelopt_quant: Optional[Union[str, Dict]] = None
     modelopt_checkpoint_restore_path: Optional[str] = None
@@ -788,6 +792,7 @@ class ServerArgs:
 
         # Set kernel backends.
         self._handle_sampling_backend()
+        self._handle_triaxial_kv()
         self._handle_attention_backend_compatibility()
         self._handle_mamba_backend()
         self._handle_linear_attn_backend()
@@ -2273,6 +2278,32 @@ class ServerArgs:
                 return "torch_native"
             else:
                 return "triton"
+
+    def _handle_triaxial_kv(self):
+        if not self.triaxial_kv:
+            return
+        if self.page_size not in (None, 1):
+            raise ValueError("--triaxial-kv requires --page-size 1")
+        self.page_size = 1
+        if self.kv_cache_dtype not in ("auto", "bf16", "bfloat16"):
+            raise ValueError("--triaxial-kv manages its own storage; keep --kv-cache-dtype auto")
+        if self.speculative_algorithm is not None:
+            raise ValueError("--triaxial-kv does not support speculative decoding")
+        if not (0.0 <= self.triaxial_int2_fraction <= 1.0):
+            raise ValueError("--triaxial-int2-fraction must be in [0, 1]")
+        self.attention_backend = "flashinfer"
+        self.prefill_attention_backend = "triaxial_flashinfer"
+        self.decode_attention_backend = "triaxial_triton"
+        self.enable_mixed_chunk = False
+        self.disable_hybrid_swa_memory = True
+        # the prefill path builds per-batch scratch buffers from real (unpadded) lengths
+        self.disable_piecewise_cuda_graph = True
+        logger.info(
+            "TriAxialKV enabled: int2_fraction=%.3f policy=%s "
+            "(prefill=triaxial_flashinfer, decode=triaxial_triton)",
+            self.triaxial_int2_fraction,
+            self.triaxial_policy or "default",
+        )
 
     def _handle_attention_backend_compatibility(self):
         model_config = self.get_model_config()
@@ -3859,6 +3890,26 @@ class ServerArgs:
             default=ServerArgs.kv_cache_dtype,
             choices=["auto", "fp8_e5m2", "fp8_e4m3", "bf16", "bfloat16", "fp4_e2m1"],
             help='Data type for kv cache storage. "auto" will use model data type. "bf16" or "bfloat16" for BF16 KV cache. "fp8_e5m2" and "fp8_e4m3" are supported for CUDA 11.8+. "fp4_e2m1" (only mxfp4) is supported for CUDA 12.8+ and PyTorch 2.8.0+',
+        )
+        parser.add_argument(
+            "--triaxial-kv",
+            action="store_true",
+            help="TriAxialKV: store the KV cache as mixed INT2/INT4 with per-token bitwidth "
+            "from a chat-template tagger (prefill=flashinfer over dequantized prefixes, "
+            "decode=fused Triton kernel). Requires --page-size 1.",
+        )
+        parser.add_argument(
+            "--triaxial-int2-fraction",
+            type=float,
+            default=ServerArgs.triaxial_int2_fraction,
+            help="TriAxialKV: share of the KV token capacity reserved for INT2 tokens "
+            "(the rest is INT4). Sets the pool offset; should match the policy's INT2 share.",
+        )
+        parser.add_argument(
+            "--triaxial-policy",
+            type=str,
+            default=ServerArgs.triaxial_policy,
+            help="TriAxialKV tag->bitwidth policy: 'default', 'all4', 'all2' or a JSON path.",
         )
         parser.add_argument(
             "--enable-fp32-lm-head",

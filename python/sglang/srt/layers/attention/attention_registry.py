@@ -241,3 +241,19 @@ def create_intel_xpu_backend(runner):
     from sglang.srt.layers.attention.xpu_backend import XPUAttentionBackend
 
     return XPUAttentionBackend(runner)
+
+
+@register_attention_backend("triaxial_flashinfer")
+def create_triaxial_flashinfer_backend(runner):
+    from sglang.srt.layers.attention.triaxial_backend import (
+        TriaxialFlashInferBackend,
+    )
+
+    return TriaxialFlashInferBackend(runner, init_new_workspace=runner.init_new_workspace)
+
+
+@register_attention_backend("triaxial_triton")
+def create_triaxial_triton_backend(runner):
+    from sglang.srt.layers.attention.triaxial_backend import TriaxialTritonBackend
+
+    return TriaxialTritonBackend(runner)

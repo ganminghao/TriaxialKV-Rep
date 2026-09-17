@@ -139,6 +139,15 @@ class ModelRunnerKVCacheMixin:
                 cell_size = (cell_size // 2) + (
                     (n * k * num_layers * 2 * kv_size) // scale_block_size
                 )
+            if self.server_args.triaxial_kv:
+                from sglang.srt.mem_cache.triaxial_pool import triaxial_cell_size
+
+                cell_size = triaxial_cell_size(
+                    self.model_config.get_num_kv_heads(get_attention_tp_size()),
+                    self.model_config.head_dim,
+                    num_layers,
+                    self.server_args.triaxial_int2_fraction,
+                )
         return cell_size
 
     def profile_max_num_token(self: ModelRunner, pre_model_load_memory: int):
@@ -678,7 +687,25 @@ class ModelRunnerKVCacheMixin:
                     **extra_args,
                 )
             else:
-                if is_float4_e2m1fn_x2(self.kv_cache_dtype):
+                if self.server_args.triaxial_kv:
+                    from sglang.srt.mem_cache.triaxial_pool import TriaxialKVPool
+
+                    self.token_to_kv_pool = TriaxialKVPool(
+                        self.max_total_num_tokens,
+                        page_size=self.page_size,
+                        dtype=self.kv_cache_dtype,
+                        head_num=self.model_config.get_num_kv_heads(
+                            get_attention_tp_size()
+                        ),
+                        head_dim=self.model_config.head_dim,
+                        layer_num=self.num_effective_layers,
+                        device=self.device,
+                        enable_memory_saver=self.server_args.enable_memory_saver,
+                        int2_fraction=self.server_args.triaxial_int2_fraction,
+                        start_layer=self.start_layer,
+                        end_layer=self.end_layer,
+                    )
+                elif is_float4_e2m1fn_x2(self.kv_cache_dtype):
                     self.token_to_kv_pool = MHATokenToKVPoolFP4(
                         self.max_total_num_tokens,
                         page_size=self.page_size,
@@ -775,6 +802,18 @@ class ModelRunnerKVCacheMixin:
                                 need_sort=need_sort,
                                 host_to_device_ratio=hisparse_cfg.host_to_device_ratio,
                             )
+                        )
+                    elif self.server_args.triaxial_kv:
+                        from sglang.srt.mem_cache.triaxial_pool import (
+                            TriaxialAllocator,
+                        )
+
+                        self.token_to_kv_pool_allocator = TriaxialAllocator(
+                            self.max_total_num_tokens,
+                            dtype=self.kv_cache_dtype,
+                            device=self.device,
+                            kvcache=self.token_to_kv_pool,
+                            need_sort=need_sort,
                         )
                     elif self.page_size == 1:
                         self.token_to_kv_pool_allocator = TokenToKVPoolAllocator(

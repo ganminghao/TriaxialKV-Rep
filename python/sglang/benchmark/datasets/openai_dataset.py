@@ -83,11 +83,17 @@ def sample_openai_requests(
 
         # Calculate prompt length by applying chat template
         # This includes the messages but not the tools
-        prompt_len = len(
-            tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True
-            )
+        templated = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True
         )
+        if not isinstance(templated, list):  # transformers >= 5 returns a BatchEncoding
+            templated = templated["input_ids"]
+        prompt_len = len(templated)
+        # Multimodal content: the text chat template counts one placeholder per image;
+        # add the real vision token count (Qwen-VL style: 32x32 px per token after the
+        # processor's resize, images in the replay files are already resized).
+        vision_tokens = _count_vision_tokens(messages)
+        prompt_len += vision_tokens
 
         # If tools are present, we need to add their token count
         # Tools are sent as part of the request and count toward input tokens
@@ -103,6 +109,8 @@ def sample_openai_requests(
                 prompt=messages,
                 prompt_len=prompt_len,
                 output_len=output_len,
+                text_prompt_len=prompt_len - vision_tokens,
+                vision_prompt_len=vision_tokens,
                 extra_request_body=extra_body,  # Store per-request parameters
             )
         )
@@ -111,3 +119,51 @@ def sample_openai_requests(
     print(f"#Input tokens: {np.sum([x.prompt_len for x in filtered_dataset])}")
     print(f"#Output tokens: {np.sum([x.output_len for x in filtered_dataset])}")
     return filtered_dataset
+
+
+def _png_size_from_data_url(url: str):
+    """Return (width, height) of a base64 PNG/JPEG data URL without decoding the image."""
+    import base64
+    import struct
+
+    try:
+        head, b64 = url.split(",", 1)
+    except ValueError:
+        return None
+    raw = base64.b64decode(b64[:4096] + "=" * (-len(b64[:4096]) % 4))
+    if raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) >= 24:
+        w, h = struct.unpack(">II", raw[16:24])
+        return w, h
+    # JPEG: scan for SOF marker
+    if raw[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(raw):
+            if raw[i] != 0xFF:
+                i += 1
+                continue
+            marker = raw[i + 1]
+            if marker in (0xC0, 0xC1, 0xC2):
+                h, w = struct.unpack(">HH", raw[i + 5 : i + 9])
+                return w, h
+            seg_len = struct.unpack(">H", raw[i + 2 : i + 4])[0]
+            i += 2 + seg_len
+    return None
+
+
+def _count_vision_tokens(messages, patch_px: int = 32) -> int:
+    total = 0
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            url = part.get("image_url", {}).get("url", "")
+            wh = _png_size_from_data_url(url) if url.startswith("data:") else None
+            if wh is None:
+                continue
+            w, h = wh
+            # the chat template already counted one <|image_pad|> placeholder
+            total += (max(1, round(w / patch_px)) * max(1, round(h / patch_px))) - 1
+    return total

@@ -467,6 +467,12 @@ class PrefillAdder:
                 self.token_to_kv_pool_allocator.available_size()
                 + self.tree_cache.full_evictable_size()
             )
+        elif hasattr(self.token_to_kv_pool_allocator, "admission_size"):
+            # TriAxialKV: INT4 region may be the binding one
+            available_and_evictable = (
+                self.token_to_kv_pool_allocator.admission_size()
+                + self.tree_cache.evictable_size()
+            )
         else:
             available_and_evictable = (
                 self.token_to_kv_pool_allocator.available_size()
@@ -487,6 +493,11 @@ class PrefillAdder:
             available_and_evictable = (
                 self.token_to_kv_pool_allocator.available_size()
                 + self.tree_cache.full_evictable_size()
+            )
+        elif hasattr(self.token_to_kv_pool_allocator, "admission_size"):
+            available_and_evictable = (
+                self.token_to_kv_pool_allocator.admission_size()
+                + self.tree_cache.evictable_size()
             )
         else:
             available_and_evictable = (

@@ -226,6 +226,45 @@ def alloc_token_slots(
     return (out_cache_loc, state) if backup_state else out_cache_loc
 
 
+def alloc_token_slots_triaxial(batch: ScheduleBatch) -> torch.Tensor:
+    """TriAxialKV prefill allocation: route each new token by its tagged bitwidth."""
+    import numpy as np
+
+    tree_cache = batch.tree_cache
+    allocator = tree_cache.token_to_kv_pool_allocator
+    num_tokens = batch.extend_num_tokens
+    evict_from_tree_cache(tree_cache, num_tokens)
+
+    chunks = []
+    for req, p, e in zip(batch.reqs, batch.prefix_lens, batch.extend_lens):
+        bits = req.triaxial_bits
+        if bits is None:
+            chunks.append(np.full(e, 4, dtype=np.uint8))
+            continue
+        seg = bits[p : p + e]
+        if len(seg) < e:  # positions past the prompt (re-prefilled decode tokens) are INT4
+            seg = np.concatenate([seg, np.full(e - len(seg), 4, dtype=np.uint8)])
+        chunks.append(seg)
+    bits_flat = torch.from_numpy(np.concatenate(chunks) if chunks else np.zeros(0, np.uint8)).to(
+        batch.device, non_blocking=True
+    )
+    out_cache_loc = allocator.alloc_mixed(bits_flat, list(batch.extend_lens))
+    if out_cache_loc is None:
+        # INT4 region exhausted: evict harder and retry once
+        tree_cache.evict(EvictParams(num_tokens=num_tokens))
+        out_cache_loc = allocator.alloc_mixed(bits_flat, list(batch.extend_lens))
+    if out_cache_loc is None:
+        error_msg = (
+            f"Out of memory (TriAxialKV). Try to lower your batch size.\n"
+            f"Try to allocate {num_tokens} tokens. {allocator.debug_print()}\n"
+            f"{available_and_evictable_str(tree_cache)}"
+        )
+        logger.error(error_msg)
+        tree_cache.pretty_print()
+        raise RuntimeError(error_msg)
+    return out_cache_loc
+
+
 def evict_from_tree_cache(tree_cache: BasePrefixCache | None, num_tokens: int):
     if tree_cache is None:
         return
@@ -246,6 +285,13 @@ def evict_from_tree_cache(tree_cache: BasePrefixCache | None, num_tokens: int):
             tree_cache.evict(
                 EvictParams(num_tokens=full_num_tokens, swa_num_tokens=swa_num_tokens)
             )
+    elif hasattr(allocator, "available_size_int4"):
+        # TriAxialKV: INT2 overflow falls back to INT4, so INT4 is the binding region
+        if (
+            allocator.available_size() < num_tokens
+            or allocator.available_size_int4() < num_tokens
+        ):
+            tree_cache.evict(EvictParams(num_tokens=num_tokens))
     else:
         # Standard allocator
         if allocator.available_size() < num_tokens:
@@ -356,7 +402,10 @@ def alloc_for_extend(
 
     # Allocate KV cache (throws exception on failure)
     if batch.tree_cache.page_size == 1:
-        out_cache_loc = alloc_token_slots(batch.tree_cache, batch.extend_num_tokens)
+        if hasattr(batch.tree_cache.token_to_kv_pool_allocator, "alloc_mixed"):
+            out_cache_loc = alloc_token_slots_triaxial(batch)
+        else:
+            out_cache_loc = alloc_token_slots(batch.tree_cache, batch.extend_num_tokens)
     else:
         # Paged allocation - build last_loc
         last_loc = [

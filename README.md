@@ -1,3 +1,13 @@
+> **这是 TriAxialKV 分支**，不是 upstream SGLang。基线为 `v0.5.10` tag。
+> 使用说明见 [`TRIAXIAL_README.md`](TRIAXIAL_README.md)，数据布局与 kernel 规格见
+> [`TRIAXIAL_DESIGN.md`](TRIAXIAL_DESIGN.md)。下面是 upstream 的原始 README。
+>
+> **This is the TriAxialKV fork** of SGLang v0.5.10, not upstream. Start from
+> [`TRIAXIAL_README.md`](TRIAXIAL_README.md); the format/kernel spec is in
+> [`TRIAXIAL_DESIGN.md`](TRIAXIAL_DESIGN.md). Upstream's README follows.
+
+---
+
 <div align="center" id="sglangtop">
 <img src="https://raw.githubusercontent.com/sgl-project/sglang/main/assets/logo.png" alt="logo" width="400" margin="10px"></img>
 

@@ -556,6 +556,22 @@ class Scheduler(
         else:
             self._think_end_id = None
 
+        # TriAxialKV: per-token bitwidth tagger (chat-template driven, no model inference)
+        self.triaxial_tagger = None
+        if self.server_args.triaxial_kv:
+            from sglang.srt.managers.triaxial_tagger import (
+                TriaxialPolicy,
+                TriaxialSpecialTokens,
+                TriaxialTagger,
+            )
+
+            assert self.tokenizer is not None, "--triaxial-kv needs the tokenizer in the scheduler"
+            policy = TriaxialPolicy.from_arg(self.server_args.triaxial_policy)
+            self.triaxial_tagger = TriaxialTagger(
+                TriaxialSpecialTokens.from_tokenizer(self.tokenizer), policy
+            )
+            logger.info("TriAxialKV tagger ready. %s", policy.describe())
+
     def init_mamba_backend(self) -> None:
         initialize_mamba_selective_state_update_backend(self.server_args)
 
@@ -1855,6 +1871,10 @@ class Scheduler(
                 self.init_req_max_new_tokens(req)
                 self._add_request_to_queue(req)
                 return
+
+        # TriAxialKV: tag the (padded) prompt and attach per-token bitwidths
+        if self.triaxial_tagger is not None:
+            req.triaxial_bits = self.triaxial_tagger.bits(req.origin_input_ids)
 
         # initialize before returning
         self.init_req_max_new_tokens(req)

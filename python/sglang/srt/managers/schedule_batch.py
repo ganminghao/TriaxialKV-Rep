@@ -708,6 +708,8 @@ class Req(ReqDllmMixin):
         # Prefix info
         # The indices to kv cache for the shared prefix.
         self.prefix_indices: torch.Tensor = torch.empty((0,), dtype=torch.int64)
+        # TriAxialKV: per-token bitwidth (2 or 4) for the prompt tokens, None if disabled
+        self.triaxial_bits = None
         # Number of tokens to run prefill.
         self.extend_input_len = 0
         # The relative logprob_start_len in an extend batch
@@ -1937,7 +1939,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     def check_decode_mem(self, selected_indices: Optional[List[int]] = None):
         num_tokens = self.new_tokens_required_next_decode(selected_indices)
         evict_from_tree_cache(self.tree_cache, num_tokens)
-        return self.token_to_kv_pool_allocator.available_size() >= num_tokens
+        allocator = self.token_to_kv_pool_allocator
+        if hasattr(allocator, "available_size_int4"):
+            # TriAxialKV: decode tokens can only be placed in the INT4 region
+            return allocator.available_size_int4() >= num_tokens
+        return allocator.available_size() >= num_tokens
 
     def retract_all(self, server_args: ServerArgs):
         retracted_reqs = self.reqs

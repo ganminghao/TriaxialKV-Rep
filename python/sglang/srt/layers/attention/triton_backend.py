@@ -100,6 +100,8 @@ class TritonAttnBackend(AttentionBackend):
         ):
             # For hybrid linear models, layer_id = 0 may not be full attention
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
+        elif hasattr(model_runner.token_to_kv_pool, "get_v_head_dim"):
+            self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
         else:
             self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[
                 -1
