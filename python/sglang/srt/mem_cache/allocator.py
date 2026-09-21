@@ -1,4 +1,5 @@
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 """
 Copyright 2025 SGLang Team
@@ -141,6 +142,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         # To avoid minor "len(free_pages) * 1" overhead
         return len(self.free_pages) + len(self.release_pages)
 
+    @prof_fn("P2::alloc")
     def alloc(self, need_size: int):
         if self.need_sort and need_size > len(self.free_pages):
             self.merge_and_sort_free()
@@ -152,6 +154,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.free_pages = self.free_pages[need_size:]
         return select_index
 
+    @prof_fn("P2::free")
     def free(self, free_index: torch.Tensor):
         if free_index.numel() == 0:
             return

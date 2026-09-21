@@ -13,6 +13,7 @@
 # ==============================================================================
 """A scheduler that manages a tensor parallel GPU worker."""
 
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 import faulthandler
 import logging
 import os
@@ -1353,17 +1354,20 @@ class Scheduler(
         def pop_and_process():
             # Process the results of the last batch
             tmp_batch, tmp_result = self.result_queue.popleft()
-            self.process_batch_result(tmp_batch, tmp_result)
+            with prof_range("P1::process_batch_result"):
+                self.process_batch_result(tmp_batch, tmp_result)
 
         while True:
             # Receive requests
-            recv_reqs = self.recv_requests()
-            self.process_input_requests(recv_reqs)
+            with prof_range("P1::recv_and_process_input"):
+                recv_reqs = self.recv_requests()
+                self.process_input_requests(recv_reqs)
             if self._engine_paused:
                 continue
 
             # Get the next batch to run
-            batch = self.get_next_batch_to_run()
+            with prof_range("P1::get_next_batch_to_run"):
+                batch = self.get_next_batch_to_run()
             self.cur_batch = batch
             disable_overlap_for_batch = self.is_disable_overlap_for_batch(batch)
 
@@ -1374,8 +1378,12 @@ class Scheduler(
 
             # Launch the current batch
             if batch:
-                batch_result = self.run_batch(batch)
-                self.result_queue.append((batch.copy(), batch_result))
+                with prof_range(
+                    "STEP::decode" if batch.forward_mode.is_decode() else "STEP::extend"
+                ):
+                    batch_result = self.run_batch(batch)
+                with prof_range("P1::batch_copy"):
+                    self.result_queue.append((batch.copy(), batch_result))
             else:
                 batch_result = None
                 self.cancel_bubble_timer()
@@ -1391,7 +1399,8 @@ class Scheduler(
             # Run sample of the current batch
             # It depends on the result of the last batch (e.g., grammar), so we run it after the last batch is processed.
             if self.is_generation:
-                self.launch_batch_sample_if_needed(batch_result)
+                with prof_range("P1::launch_batch_sample"):
+                    self.launch_batch_sample_if_needed(batch_result)
 
             # Update last_batch
             self.last_batch = batch
@@ -1874,7 +1883,8 @@ class Scheduler(
 
         # TriAxialKV: tag the (padded) prompt and attach per-token bitwidths
         if self.triaxial_tagger is not None:
-            req.triaxial_bits = self.triaxial_tagger.bits(req.origin_input_ids)
+            with prof_range("P1::triaxial_tagger"):
+                req.triaxial_bits = self.triaxial_tagger.bits(req.origin_input_ids)
 
         # initialize before returning
         self.init_req_max_new_tokens(req)

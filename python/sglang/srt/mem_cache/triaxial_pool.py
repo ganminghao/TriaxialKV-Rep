@@ -13,6 +13,7 @@ and groups INT2 tokens into pages internally.
 """
 
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 import logging
 from typing import List, Optional, Tuple
@@ -213,6 +214,7 @@ class TriaxialKVPool(KVCache):
         self._grp = (idx4, rows4, idx2, slots2, tok_rows, pages)
         return self._grp
 
+    @prof_fn("P3::set_kv_buffer")
     def set_kv_buffer(
         self,
         layer,
@@ -241,6 +243,7 @@ class TriaxialKVPool(KVCache):
             quant_int2_v_tokens(v2, slots2, kv.v2_data, kv.v2_meta)
             quant_int2_k_pages(cache_k.contiguous(), tok_rows, pages, kv.k2_data, kv.k2_meta)
 
+    @prof_fn("P3::set_kv_buffer_int4")
     def set_kv_buffer_int4(self, layer_id: int, loc: torch.Tensor, cache_k, cache_v):
         """Fast path for decode batches: every slot in `loc` is INT4 (no host sync)."""
         kv = self.layer_kv(layer_id)
@@ -336,6 +339,7 @@ class TriaxialAllocator(BaseTokenToKVPoolAllocator):
         self.free_pages = self.free_slots4
 
     # -------------------------------------------------------------- allocate
+    @prof_fn("P2::alloc")
     def alloc(self, need_size: int):
         """Plain allocation (no bitwidth info): everything INT4."""
         if need_size > len(self.free_slots4):
@@ -345,9 +349,11 @@ class TriaxialAllocator(BaseTokenToKVPoolAllocator):
         self.free_pages = self.free_slots4
         return out
 
+    @prof_fn("P2::alloc_decode")
     def alloc_decode(self, bs: int):
         return self.alloc(bs)
 
+    @prof_fn("P2::alloc_mixed")
     def alloc_mixed(self, bits: torch.Tensor, req_lens: List[int]) -> Optional[torch.Tensor]:
         """Allocate slots for prefill tokens in position order.
 
@@ -400,6 +406,7 @@ class TriaxialAllocator(BaseTokenToKVPoolAllocator):
         return out
 
     # ------------------------------------------------------------------ free
+    @prof_fn("P2::free")
     def free(self, free_index: torch.Tensor):
         if free_index.numel() == 0:
             return

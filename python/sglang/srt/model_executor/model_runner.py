@@ -14,6 +14,7 @@
 """ModelRunner runs the forward passes of the models."""
 
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 import datetime
 import gc
@@ -2630,7 +2631,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 self.decode_attn_backend.init_forward_metadata(forward_batch)
                 forward_batch.attn_backend = self.decode_attn_backend
             else:
-                self.attn_backend.init_forward_metadata(forward_batch)
+                with prof_range("P1::init_forward_metadata"):
+                    self.attn_backend.init_forward_metadata(forward_batch)
         # FIXME: add pp_proxy_tensors arg to all models
         kwargs = {}
         if self.support_pp:
@@ -2670,7 +2672,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             )
 
         if not skip_attn_backend_init:
-            self.attn_backend.init_forward_metadata(forward_batch)
+            with prof_range("P1::init_forward_metadata"):
+                self.attn_backend.init_forward_metadata(forward_batch)
 
         return (
             self.model.forward(

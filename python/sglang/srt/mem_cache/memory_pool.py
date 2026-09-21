@@ -14,6 +14,7 @@ limitations under the License.
 """
 
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 """
 Memory pool.
@@ -992,6 +993,7 @@ class MHATokenToKVPool(KVCache):
     def get_kv_buffer(self, layer_id: int):
         return self.get_key_buffer(layer_id), self.get_value_buffer(layer_id)
 
+    @prof_fn("P3::set_kv_buffer")
     def set_kv_buffer(
         self,
         layer: RadixAttention,

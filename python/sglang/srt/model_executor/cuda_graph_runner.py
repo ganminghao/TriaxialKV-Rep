@@ -14,6 +14,7 @@
 """Run the model with cuda graph and torch.compile."""
 
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 import bisect
 import gc
@@ -1065,6 +1066,7 @@ class CudaGraphRunner:
             self.capture_hidden_mode = required_capture_hidden_mode
             self.capture()
 
+    @prof_fn("P1::graph_replay_prepare")
     def replay_prepare(
         self,
         forward_batch: ForwardBatch,

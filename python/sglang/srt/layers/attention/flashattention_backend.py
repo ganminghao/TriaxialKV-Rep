@@ -1,4 +1,5 @@
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
@@ -523,6 +524,7 @@ class FlashAttentionBackend(AttentionBackend):
 
         self.forward_metadata = metadata
 
+    @prof_fn("K1::attn")
     def forward_extend(
         self,
         q: torch.Tensor,
@@ -900,6 +902,7 @@ class FlashAttentionBackend(AttentionBackend):
 
         return o.view(-1, layer.tp_q_head_num * layer.v_head_dim)
 
+    @prof_fn("K1::attn")
     def forward_decode(
         self,
         q: torch.Tensor,

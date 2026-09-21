@@ -13,6 +13,7 @@ They are combined by SGLang's ``HybridAttnBackend`` (prefill != decode backend).
 """
 
 from __future__ import annotations
+from sglang.srt.utils.triaxial_profile import prof_fn, prof_range
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
@@ -178,6 +179,7 @@ class TriaxialFlashInferBackend(FlashInferAttnBackend):
         )
         self._scratch_v = torch.empty_like(self._scratch_k)
 
+    @prof_fn("K1::attn")
     def forward_extend(
         self,
         q: torch.Tensor,
@@ -197,10 +199,11 @@ class TriaxialFlashInferBackend(FlashInferAttnBackend):
 
         P, N = meta.num_prefix, meta.num_new
         sk, sv = self._scratch_k, self._scratch_v
-        if P > 0:
-            dequant_gather(meta.prefix_slots, self.pool.layer_kv(layer.layer_id), sk[:P], sv[:P])
-        sk[P : P + N].copy_(k)
-        sv[P : P + N].copy_(v)
+        with prof_range("P4::dequant_to_scratch"):
+            if P > 0:
+                dequant_gather(meta.prefix_slots, self.pool.layer_kv(layer.layer_id), sk[:P], sv[:P])
+            sk[P : P + N].copy_(k)
+            sv[P : P + N].copy_(v)
 
         wrapper = self.forward_metadata.prefill_wrappers[0]
         o = wrapper.forward(
@@ -223,6 +226,7 @@ class TriaxialTritonBackend(TritonAttnBackend):
         self.pool = model_runner.token_to_kv_pool
         self.decode_attention_fwd_mixed = torch.compiler.disable(decode_attention_fwd_mixed)
 
+    @prof_fn("K1::attn")
     def forward_decode(
         self,
         q: torch.Tensor,
